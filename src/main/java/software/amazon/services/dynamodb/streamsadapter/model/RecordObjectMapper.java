@@ -12,7 +12,7 @@
  * express or implied. See the License for the specific language governing
  * permissions and limitations under the License.
  */
-package com.amazonaws.services.dynamodbv2.streamsadapter.model;
+package software.amazon.services.dynamodb.streamsadapter.model;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -20,10 +20,14 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-import com.amazonaws.services.dynamodbv2.model.AttributeValue;
-import com.amazonaws.services.dynamodbv2.model.Record;
-import com.amazonaws.services.dynamodbv2.model.StreamRecord;
-import com.amazonaws.services.dynamodbv2.model.StreamViewType;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
+import software.amazon.awssdk.services.dynamodb.model.Record;
+import software.amazon.awssdk.services.dynamodb.model.StreamRecord;
+import software.amazon.awssdk.services.dynamodb.model.StreamViewType;
+//import com.amazonaws.services.dynamodbv2.model.AttributeValue;
+//import com.amazonaws.services.dynamodbv2.model.Record;
+//import com.amazonaws.services.dynamodbv2.model.StreamRecord;
+//import com.amazonaws.services.dynamodbv2.model.StreamViewType;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonGenerator;
