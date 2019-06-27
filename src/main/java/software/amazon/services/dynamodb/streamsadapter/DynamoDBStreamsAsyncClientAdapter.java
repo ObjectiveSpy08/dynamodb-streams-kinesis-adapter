@@ -6,7 +6,7 @@ import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsAsyncClie
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.model.*;
 import software.amazon.awssdk.services.kinesis.paginators.ListStreamConsumersPublisher;
-import software.amazon.services.dynamodb.streamsadapter.model.RequestResponseTransformer;
+import software.amazon.services.dynamodb.streamsadapter.model.RequestResponseTranslator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,12 +18,14 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
 
     private final DynamoDbStreamsAsyncClient internalClient;
 
-    public static final Integer GET_RECORDS_LIMIT = 1000;
+    private static final Integer GET_RECORDS_LIMIT = 1000;
+
+    private static final RequestResponseTranslator requestResponseTranslator = new RequestResponseTranslator();
 
     /**
      * Enum values decides the behavior of application when customer loses some records when KCL lags behind
      */
-    public enum SkipRecordsBehavior {
+    private enum SkipRecordsBehavior {
         /**
          * Skips processing to the oldest available record
          */
@@ -112,7 +114,7 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
 
     @Override
     public CompletableFuture<DescribeStreamResponse> describeStream(DescribeStreamRequest describeStreamRequest) {
-        CompletableFuture<software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse> responseFuture = internalClient.describeStream(RequestResponseTransformer.describeStreamRequest(describeStreamRequest));
+        CompletableFuture<software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse> responseFuture = internalClient.describeStream(requestResponseTranslator.translate(describeStreamRequest));
         software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse response = null;
         try {
             response = responseFuture.get();
@@ -137,7 +139,7 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
                     .tableName(response.streamDescription().tableName()).streamViewType(response.streamDescription().streamViewType()).build();
             response = software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse.builder().streamDescription(newStreamDescription).build();
         }
-        return CompletableFuture.completedFuture(RequestResponseTransformer.describeStreamResponse(response));
+        return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
     }
 
     private List<software.amazon.awssdk.services.dynamodb.model.Shard> getAllShardsForDisabledStream(software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse initialResponse) {
@@ -248,20 +250,20 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
         software.amazon.awssdk.services.dynamodb.model.GetRecordsResponse response = null;
 
         if (getRecordsRequest.limit() != null && getRecordsRequest.limit() > GET_RECORDS_LIMIT) {
-            responseFuture = internalClient.getRecords(RequestResponseTransformer.getRecordsRequest(GetRecordsRequest.builder()
+            responseFuture = internalClient.getRecords(requestResponseTranslator.translate(GetRecordsRequest.builder()
                 .limit(GET_RECORDS_LIMIT)
                 .shardIterator(getRecordsRequest.shardIterator())
                 .build()
                 ));
         }
         else {
-            responseFuture = internalClient.getRecords(RequestResponseTransformer.getRecordsRequest(getRecordsRequest));
+            responseFuture = internalClient.getRecords(requestResponseTranslator.translate(getRecordsRequest));
         }
 
         //requestCache.addEntry(getRecordsRequest, requestAdapter);
         try {
             response = responseFuture.get();
-            return CompletableFuture.completedFuture(RequestResponseTransformer.getRecordsResponse(response));
+            return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
         } catch (InterruptedException e) {
             e.printStackTrace();
             return CompletableFuture.completedFuture(null);
@@ -278,11 +280,11 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
 
     @Override
     public CompletableFuture<GetShardIteratorResponse> getShardIterator(GetShardIteratorRequest getShardIteratorRequest) {
-        CompletableFuture<software.amazon.awssdk.services.dynamodb.model.GetShardIteratorResponse> responseFuture = internalClient.getShardIterator(RequestResponseTransformer.getShardIteratorRequest(getShardIteratorRequest));
+        CompletableFuture<software.amazon.awssdk.services.dynamodb.model.GetShardIteratorResponse> responseFuture = internalClient.getShardIterator(requestResponseTranslator.translate(getShardIteratorRequest));
         software.amazon.awssdk.services.dynamodb.model.GetShardIteratorResponse response = null;
         try {
             response = responseFuture.get();
-            return CompletableFuture.completedFuture(RequestResponseTransformer.shardIteratorResponse(response));
+            return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
         } catch (InterruptedException e) {
             e.printStackTrace();
             return CompletableFuture.completedFuture(null);
@@ -358,11 +360,11 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
     }
 
     @Override public CompletableFuture<ListStreamsResponse> listStreams(ListStreamsRequest listStreamsRequest) {
-        CompletableFuture<software.amazon.awssdk.services.dynamodb.model.ListStreamsResponse> responseFuture = internalClient.listStreams(RequestResponseTransformer.listStreamRequest(listStreamsRequest));
+        CompletableFuture<software.amazon.awssdk.services.dynamodb.model.ListStreamsResponse> responseFuture = internalClient.listStreams(requestResponseTranslator.translate(listStreamsRequest));
         software.amazon.awssdk.services.dynamodb.model.ListStreamsResponse response = null;
         try {
             response = responseFuture.get();
-            return CompletableFuture.completedFuture(RequestResponseTransformer.listStreamsResponse(response));
+            return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
         } catch (InterruptedException e) {
             e.printStackTrace();
             return CompletableFuture.completedFuture(null);

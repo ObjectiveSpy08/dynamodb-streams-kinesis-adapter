@@ -41,7 +41,8 @@ import java.util.stream.Collectors;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 // TODO: No static methods. immutable map
-public class RequestResponseTransformer {
+
+public class RequestResponseTranslator {
     private static final Map<software.amazon.awssdk.services.kinesis.model.ShardIteratorType, ShardIteratorType> shardIteratorTypeMap =
         new EnumMap<>(software.amazon.awssdk.services.kinesis.model.ShardIteratorType.class);
 
@@ -68,14 +69,14 @@ public class RequestResponseTransformer {
         streamStatusMap.put(StreamStatus.ENABLING, software.amazon.awssdk.services.kinesis.model.StreamStatus.CREATING);
     }
 
-    public static ListStreamsRequest listStreamRequest(software.amazon.awssdk.services.kinesis.model.ListStreamsRequest kinesisRequest) {
+    public ListStreamsRequest translate(software.amazon.awssdk.services.kinesis.model.ListStreamsRequest kinesisRequest) {
         return ListStreamsRequest.builder()
             .exclusiveStartStreamArn(kinesisRequest.exclusiveStartStreamName())
             .limit(kinesisRequest.limit())
             .build();
     }
 
-    public static GetShardIteratorRequest getShardIteratorRequest(software.amazon.awssdk.services.kinesis.model.GetShardIteratorRequest kinesisRequest) {
+    public GetShardIteratorRequest translate(software.amazon.awssdk.services.kinesis.model.GetShardIteratorRequest kinesisRequest) {
         return GetShardIteratorRequest.builder()
             .sequenceNumber(kinesisRequest.startingSequenceNumber())
             .shardId(kinesisRequest.shardId())
@@ -84,7 +85,7 @@ public class RequestResponseTransformer {
             .build();
     }
 
-    public static DescribeStreamRequest describeStreamRequest(software.amazon.awssdk.services.kinesis.model.DescribeStreamRequest kinesisRequest) {
+    public DescribeStreamRequest translate(software.amazon.awssdk.services.kinesis.model.DescribeStreamRequest kinesisRequest) {
         return DescribeStreamRequest.builder()
             .exclusiveStartShardId(kinesisRequest.exclusiveStartShardId())
             .limit(kinesisRequest.limit())
@@ -92,14 +93,14 @@ public class RequestResponseTransformer {
             .build();
     }
 
-    public static GetRecordsRequest getRecordsRequest(software.amazon.awssdk.services.kinesis.model.GetRecordsRequest kinesisRequest) {
+    public GetRecordsRequest translate(software.amazon.awssdk.services.kinesis.model.GetRecordsRequest kinesisRequest) {
         return GetRecordsRequest.builder()
             .limit(kinesisRequest.limit())
             .shardIterator(kinesisRequest.shardIterator())
             .build();
     }
 
-    public static software.amazon.awssdk.services.kinesis.model.Shard getShard(Shard shard) {
+    public software.amazon.awssdk.services.kinesis.model.Shard translate(Shard shard) {
         software.amazon.awssdk.services.kinesis.model.SequenceNumberRange sequenceNumberRange = software.amazon.awssdk.services.kinesis.model.SequenceNumberRange.builder()
             .startingSequenceNumber(shard.sequenceNumberRange().startingSequenceNumber())
             .endingSequenceNumber(shard.sequenceNumberRange().endingSequenceNumber())
@@ -119,35 +120,35 @@ public class RequestResponseTransformer {
     }
 
     //if-else/switch vs maps
-    public static software.amazon.awssdk.services.kinesis.model.StreamDescription streamDescription(StreamDescription dynamoDBDescription) {
+    public software.amazon.awssdk.services.kinesis.model.StreamDescription translate(StreamDescription dynamoDBDescription) {
         return software.amazon.awssdk.services.kinesis.model.StreamDescription.builder()
-            .shards(dynamoDBDescription.shards().stream().map(RequestResponseTransformer::getShard).collect(Collectors.toList()))
+            .shards(dynamoDBDescription.shards().stream().map(this::translate).collect(Collectors.toList()))
             .streamARN(dynamoDBDescription.streamArn())
             .streamStatus(streamStatusMap.get(dynamoDBDescription.streamStatus()))
             .hasMoreShards(dynamoDBDescription.lastEvaluatedShardId() != null)
             .build();
     }
 
-    public static software.amazon.awssdk.services.kinesis.model.DescribeStreamResponse describeStreamResponse(DescribeStreamResponse dynamoDBResponse) {
+    public software.amazon.awssdk.services.kinesis.model.DescribeStreamResponse translate(DescribeStreamResponse dynamoDBResponse) {
         return software.amazon.awssdk.services.kinesis.model.DescribeStreamResponse.builder()
-            .streamDescription(RequestResponseTransformer.streamDescription(dynamoDBResponse.streamDescription()))
+            .streamDescription(this.translate(dynamoDBResponse.streamDescription()))
             .build();
     }
 
-    public static software.amazon.awssdk.services.kinesis.model.ListStreamsResponse listStreamsResponse(ListStreamsResponse dynamoDBResponse) {
+    public software.amazon.awssdk.services.kinesis.model.ListStreamsResponse translate(ListStreamsResponse dynamoDBResponse) {
         return software.amazon.awssdk.services.kinesis.model.ListStreamsResponse.builder()
             .streamNames(dynamoDBResponse.streams().stream().map(Stream::streamArn).collect(Collectors.toList()))
             .hasMoreStreams(dynamoDBResponse.lastEvaluatedStreamArn() != null)
             .build();
     }
 
-    public static software.amazon.awssdk.services.kinesis.model.GetShardIteratorResponse shardIteratorResponse(GetShardIteratorResponse dynamoDBResponse) {
+    public software.amazon.awssdk.services.kinesis.model.GetShardIteratorResponse translate(GetShardIteratorResponse dynamoDBResponse) {
         return software.amazon.awssdk.services.kinesis.model.GetShardIteratorResponse.builder()
             .shardIterator(dynamoDBResponse.shardIterator())
             .build();
     }
 
-    public static software.amazon.awssdk.services.kinesis.model.Record getRecord(Record record) {
+    public software.amazon.awssdk.services.kinesis.model.Record translate(Record record) {
         String value = record.dynamodb().newImage().toString();
         //byte[] result = new byte[]{value};
         try {
@@ -171,10 +172,10 @@ public class RequestResponseTransformer {
         }
     }
 
-    public static software.amazon.awssdk.services.kinesis.model.GetRecordsResponse getRecordsResponse(GetRecordsResponse dynamoDBResponse) {
+    public software.amazon.awssdk.services.kinesis.model.GetRecordsResponse translate(GetRecordsResponse dynamoDBResponse) {
         //System.out.println("getRecords transaformation");
         return software.amazon.awssdk.services.kinesis.model.GetRecordsResponse.builder()
-            .records(dynamoDBResponse.records().stream().map(RequestResponseTransformer::getRecord).collect(Collectors.toList()))
+            .records(dynamoDBResponse.records().stream().map(this::translate).collect(Collectors.toList()))
             .nextShardIterator(dynamoDBResponse.nextShardIterator())
             .build();
     }

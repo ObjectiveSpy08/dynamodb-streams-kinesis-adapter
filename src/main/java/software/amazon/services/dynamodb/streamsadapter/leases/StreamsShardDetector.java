@@ -15,24 +15,14 @@
 
 package software.amazon.services.dynamodb.streamsadapter.leases;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import com.amazonaws.services.dynamodbv2.streamsadapter.utils.Sleeper;
+import software.amazon.services.dynamodb.streamsadapter.utils.Sleeper;
 import com.google.common.annotations.VisibleForTesting;
-import org.apache.commons.lang3.StringUtils;
 
-import lombok.AccessLevel;
-import lombok.Getter;
 import lombok.NonNull;
 import lombok.Synchronized;
 import lombok.experimental.Accessors;
@@ -40,26 +30,18 @@ import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.model.*;
 import software.amazon.kinesis.leases.ShardDetector;
-import software.amazon.awssdk.utils.CollectionUtils;
-import software.amazon.kinesis.annotations.KinesisClientInternalApi;
-import software.amazon.kinesis.common.FutureUtils;
-import software.amazon.kinesis.common.KinesisRequestsBuilder;
-import software.amazon.kinesis.retrieval.AWSExceptionManager;
 
 /**
  *
  */
 @Slf4j
 @Accessors(fluent = true)
-@KinesisClientInternalApi
 public class StreamsShardDetector implements ShardDetector {
 
     @NonNull
     private final KinesisAsyncClient kinesisClient;
     @NonNull
     private final String streamName;
-    private final long listShardsBackoffTimeInMillis;
-    private final int maxListShardsRetryAttempts;
 
     private final int maxRetriesToResolveInconsistencies;
     private final int maxDescribeStreamRetryAttempts;
@@ -69,34 +51,18 @@ public class StreamsShardDetector implements ShardDetector {
     private final long inconsistencyResolutionRetryBackoffBaseInMillis;
     private final Random random;
     private final Sleeper sleeper;
-
-    private final long listShardsCacheAllowedAgeInSeconds;
-    private final int maxCacheMissesBeforeReload;
-    private final int cacheMissWarningModulus;
-    private final Duration kinesisRequestTimeout;
     private ShardGraph shardGraph;
 
-    private volatile Map<String, Shard> cachedShardMap = null;
-    private volatile Instant lastCacheUpdateTime;
-    @Getter(AccessLevel.PACKAGE)
-    private AtomicInteger cacheMisses = new AtomicInteger(0);
+    
     private final AtomicReference<List<Shard>> listOfShardsSinceLastGet = new AtomicReference<>();
 
     private static final long MAX_SHARD_COUNT_TO_TRIGGER_RETRIES = 1500L;
 
-    public StreamsShardDetector(KinesisAsyncClient kinesisClient, String streamName, long listShardsBackoffTimeInMillis,
-        int maxListShardsRetryAttempts, long listShardsCacheAllowedAgeInSeconds, int maxCacheMissesBeforeReload,
-        int cacheMissWarningModulus, Duration kinesisRequestTimeout, int maxRetriesToResolveInconsistencies, int maxDescribeStreamRetryAttempts, long describeStreamBackoffTimeInMillis,
+    public StreamsShardDetector(KinesisAsyncClient kinesisClient, String streamName, int maxRetriesToResolveInconsistencies, int maxDescribeStreamRetryAttempts, long describeStreamBackoffTimeInMillis,
         boolean isDefaultInconsistencyResolutionRetryBackoffJitterEnabled, long inconsistencyResolutionRetryBackoffBaseInMillis,
         long inconsistencyResolutionRetryBackoffMultiplierInMillis, Sleeper sleeper, Random random) {
         this.kinesisClient = kinesisClient;
         this.streamName = streamName;
-        this.listShardsBackoffTimeInMillis = listShardsBackoffTimeInMillis;
-        this.maxListShardsRetryAttempts = maxListShardsRetryAttempts;
-        this.listShardsCacheAllowedAgeInSeconds = listShardsCacheAllowedAgeInSeconds;
-        this.maxCacheMissesBeforeReload = maxCacheMissesBeforeReload;
-        this.cacheMissWarningModulus = cacheMissWarningModulus;
-        this.kinesisRequestTimeout = kinesisRequestTimeout;
         this.maxRetriesToResolveInconsistencies = maxRetriesToResolveInconsistencies;
         this.maxDescribeStreamRetryAttempts = maxDescribeStreamRetryAttempts;
         this.describeStreamBackoffTimeInMillis = describeStreamBackoffTimeInMillis;
@@ -111,56 +77,9 @@ public class StreamsShardDetector implements ShardDetector {
 
     @Override
     public Shard shard(@NonNull final String shardId) {
-//        if (CollectionUtils.isNullOrEmpty(this.cachedShardMap)) {
-//            synchronized (this) {
-//                if (CollectionUtils.isNullOrEmpty(this.cachedShardMap)) {
-//                    listShards();
-//                }
-//            }
-//        }
-//
-//        Shard shard = cachedShardMap.get(shardId);
-//
-//        if (shard == null) {
-//            if (cacheMisses.incrementAndGet() > maxCacheMissesBeforeReload || shouldRefreshCache()) {
-//                synchronized (this) {
-//                    shard = cachedShardMap.get(shardId);
-//
-//                    if (shard == null) {
-//                        log.info("Too many shard map cache misses or cache is out of date -- forcing a refresh");
-//                        listShards();
-//                        shard = cachedShardMap.get(shardId);
-//
-//                        if (shard == null) {
-//                            log.warn("Even after cache refresh shard '{}' wasn't found. This could indicate a bigger"
-//                                + " problem.", shardId);
-//                        }
-//
-//                        cacheMisses.set(0);
-//                    } else {
-//                        //
-//                        // If the shardmap got updated, go ahead and set cache misses to 0
-//                        //
-//                        cacheMisses.set(0);
-//                    }
-//                }
-//            }
-//        }
-//
-//        if (shard == null) {
-//            final String message = String.format("Cannot find the shard given the shardId %s. Cache misses: %s",
-//                shardId, cacheMisses);
-//            if (cacheMisses.get() % cacheMissWarningModulus == 0) {
-//                log.warn(message);
-//            } else {
-//                log.debug(message);
-//            }
-//        }
-//
-//        return shard;
         if (this.listOfShardsSinceLastGet.get() == null) {
             //Update this.listOfShardsSinceLastGet as needed.
-            this.listShards();
+            listShards();
         }
 
         for (Shard shard : listOfShardsSinceLastGet.get()) {
@@ -262,7 +181,7 @@ public class StreamsShardDetector implements ShardDetector {
         }
 
         this.listOfShardsSinceLastGet.set(shardGraph.getShards());
-        this.shardGraph = new ShardGraph();
+        shardGraph = new ShardGraph();
         return listOfShardsSinceLastGet.get();
     }
 
@@ -323,78 +242,6 @@ public class StreamsShardDetector implements ShardDetector {
         return (long)(baseMultiplier * inconsistencyResolutionRetryBackoffBaseInMillis) +
             (long)Math.pow(2.0, retryAttempt) * inconsistencyResolutionRetryBackoffMultiplierInMillis;
     }
-
-    private ListShardsResponse listShards(final String nextToken) {
-        final AWSExceptionManager exceptionManager = new AWSExceptionManager();
-        exceptionManager.add(LimitExceededException.class, t -> t);
-        exceptionManager.add(ResourceInUseException.class, t -> t);
-        exceptionManager.add(KinesisException.class, t -> t);
-
-        ListShardsRequest.Builder request = KinesisRequestsBuilder.listShardsRequestBuilder();
-        if (StringUtils.isEmpty(nextToken)) {
-            request = request.streamName(streamName);
-        } else {
-            request = request.nextToken(nextToken);
-        }
-        ListShardsResponse result = null;
-        LimitExceededException lastException = null;
-        int remainingRetries = maxListShardsRetryAttempts;
-
-        while (result == null) {
-
-            try {
-                try {
-                    result = FutureUtils.resolveOrCancelFuture(kinesisClient.listShards(request.build()), kinesisRequestTimeout);
-                } catch (ExecutionException e) {
-                    throw exceptionManager.apply(e.getCause());
-                } catch (InterruptedException e) {
-                    // TODO: check if this is the correct behavior for Interrupted Exception
-                    log.debug("Interrupted exception caught, shutdown initiated, returning null");
-                    return null;
-                }
-            } catch (ResourceInUseException e) {
-                log.info("Stream is not in Active/Updating status, returning null (wait until stream is in"
-                    + " Active or Updating)");
-                return null;
-            } catch (LimitExceededException e) {
-                log.info("Got LimitExceededException when listing shards {}. Backing off for {} millis.", streamName,
-                    listShardsBackoffTimeInMillis);
-                try {
-                    Thread.sleep(listShardsBackoffTimeInMillis);
-                } catch (InterruptedException ie) {
-                    log.debug("Stream {} : Sleep  was interrupted ", streamName, ie);
-                }
-                lastException = e;
-            } catch (TimeoutException te) {
-                throw new RuntimeException(te);
-            }
-            remainingRetries--;
-            if (remainingRetries <= 0 && result == null) {
-                if (lastException != null) {
-                    throw lastException;
-                }
-                throw new IllegalStateException("Received null from ListShards call.");
-            }
-        }
-        return result;
-    }
-
-//    void cachedShardMap(final List<Shard> shards) {
-//        cachedShardMap = shards.stream().collect(Collectors.toMap(Shard::shardId, Function.identity()));
-//        lastCacheUpdateTime = Instant.now();
-//    }
-
-//    private boolean shouldRefreshCache() {
-//        final Duration secondsSinceLastUpdate = Duration.between(lastCacheUpdateTime, Instant.now());
-//        final String message = String.format("Shard map cache is %d seconds old", secondsSinceLastUpdate.getSeconds());
-//        if (secondsSinceLastUpdate.compareTo(Duration.of(listShardsCacheAllowedAgeInSeconds, ChronoUnit.SECONDS)) > 0) {
-//            log.info("{}. Age exceeds limit of {} seconds -- Refreshing.", message, listShardsCacheAllowedAgeInSeconds);
-//            return true;
-//        }
-//
-//        log.debug("{}. Age doesn't exceed limit of {} seconds.", message, listShardsCacheAllowedAgeInSeconds);
-//        return false;
-//    }
 
     private enum ShardGraphProcessingResult {
         STREAM_DISABLED,
@@ -491,7 +338,7 @@ public class StreamsShardDetector implements ShardDetector {
                 final String parentShardId = shard.parentShardId();
                 if (null != parentShardId && closedLeafNodeIds.contains(parentShardId)) {
                     ShardNode shardNode = addNode(shard);
-                    closedLeafNodeIds.remove(parentShardId);
+                    closedLeafNodeIds.remove(parentShardId); // dont think we need this
                     if (shardNode.isShardClosed()) {
                         closedLeafNodeIds.add(shardNode.getShardId());
                     }
