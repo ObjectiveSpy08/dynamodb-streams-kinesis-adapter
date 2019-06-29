@@ -28,7 +28,7 @@ import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Data
-public class DynamoDBStreamsLeaseManagementFactory implements LeaseManagementFactory{
+public class StreamsLeaseManagementFactory implements LeaseManagementFactory{
     private LeaseManagementFactory internalFactory;
     private KinesisAsyncClient kinesisClient;
     private String streamName;
@@ -39,7 +39,7 @@ public class DynamoDBStreamsLeaseManagementFactory implements LeaseManagementFac
      * Constructor.
      * @param leaseManagementFactory
      */
-    public DynamoDBStreamsLeaseManagementFactory(final LeaseManagementFactory leaseManagementFactory, KinesisAsyncClient kinesisAsyncClient, String streamName) {
+    public StreamsLeaseManagementFactory(final LeaseManagementFactory leaseManagementFactory, KinesisAsyncClient kinesisAsyncClient, String streamName) {
         this.internalFactory = leaseManagementFactory;
         this.kinesisClient = kinesisAsyncClient;
         this.streamName = streamName;

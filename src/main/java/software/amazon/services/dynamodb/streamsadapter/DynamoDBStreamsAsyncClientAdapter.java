@@ -25,7 +25,7 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
     /**
      * Enum values decides the behavior of application when customer loses some records when KCL lags behind
      */
-    private enum SkipRecordsBehavior {
+    public enum SkipRecordsBehavior {
         /**
          * Skips processing to the oldest available record
          */
