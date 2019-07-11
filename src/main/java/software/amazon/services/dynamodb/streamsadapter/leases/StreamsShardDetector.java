@@ -15,14 +15,7 @@
 
 package software.amazon.services.dynamodb.streamsadapter.leases;
 
-import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
-
-import software.amazon.services.dynamodb.streamsadapter.utils.Sleeper;
 import com.google.common.annotations.VisibleForTesting;
-
 import lombok.NonNull;
 import lombok.Synchronized;
 import lombok.experimental.Accessors;
@@ -30,19 +23,22 @@ import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.model.*;
 import software.amazon.kinesis.leases.ShardDetector;
+import software.amazon.services.dynamodb.streamsadapter.exceptions.ExceptionManager;
+import software.amazon.services.dynamodb.streamsadapter.utils.Sleeper;
+
+import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 /**
  *
  */
-@Slf4j
-@Accessors(fluent = true)
-public class StreamsShardDetector implements ShardDetector {
+@Slf4j @Accessors(fluent = true) public class StreamsShardDetector implements ShardDetector {
 
-    @NonNull
-    private final KinesisAsyncClient kinesisClient;
-    @NonNull
-    private final String streamName;
-
+    private static final long MAX_SHARD_COUNT_TO_TRIGGER_RETRIES = 1500L;
+    @NonNull private final KinesisAsyncClient kinesisClient;
+    @NonNull private final String streamName;
     private final int maxRetriesToResolveInconsistencies;
     private final int maxDescribeStreamRetryAttempts;
     private final long describeStreamBackoffTimeInMillis;
@@ -51,39 +47,41 @@ public class StreamsShardDetector implements ShardDetector {
     private final long inconsistencyResolutionRetryBackoffBaseInMillis;
     private final Random random;
     private final Sleeper sleeper;
+    private final AtomicReference<List<Shard>> listOfShardsSinceLastGet = new AtomicReference<>();
     private ShardGraph shardGraph;
 
-    
-    private final AtomicReference<List<Shard>> listOfShardsSinceLastGet = new AtomicReference<>();
-
-    private static final long MAX_SHARD_COUNT_TO_TRIGGER_RETRIES = 1500L;
-
-    public StreamsShardDetector(KinesisAsyncClient kinesisClient, String streamName, int maxRetriesToResolveInconsistencies, int maxDescribeStreamRetryAttempts, long describeStreamBackoffTimeInMillis,
-        boolean isDefaultInconsistencyResolutionRetryBackoffJitterEnabled, long inconsistencyResolutionRetryBackoffBaseInMillis,
-        long inconsistencyResolutionRetryBackoffMultiplierInMillis, Sleeper sleeper, Random random) {
+    public StreamsShardDetector(KinesisAsyncClient kinesisClient,
+        String streamName,
+        int maxRetriesToResolveInconsistencies,
+        int maxDescribeStreamRetryAttempts,
+        long describeStreamBackoffTimeInMillis,
+        boolean isDefaultInconsistencyResolutionRetryBackoffJitterEnabled,
+        long inconsistencyResolutionRetryBackoffBaseInMillis,
+        long inconsistencyResolutionRetryBackoffMultiplierInMillis,
+        Sleeper sleeper,
+        Random random) {
         this.kinesisClient = kinesisClient;
         this.streamName = streamName;
         this.maxRetriesToResolveInconsistencies = maxRetriesToResolveInconsistencies;
         this.maxDescribeStreamRetryAttempts = maxDescribeStreamRetryAttempts;
         this.describeStreamBackoffTimeInMillis = describeStreamBackoffTimeInMillis;
-        this.isInconsistencyResolutionRetryBackoffJitterEnabled
-            = isDefaultInconsistencyResolutionRetryBackoffJitterEnabled;
+        this.isInconsistencyResolutionRetryBackoffJitterEnabled =
+            isDefaultInconsistencyResolutionRetryBackoffJitterEnabled;
         this.inconsistencyResolutionRetryBackoffBaseInMillis = inconsistencyResolutionRetryBackoffBaseInMillis;
-        this.inconsistencyResolutionRetryBackoffMultiplierInMillis
-            = inconsistencyResolutionRetryBackoffMultiplierInMillis;
+        this.inconsistencyResolutionRetryBackoffMultiplierInMillis =
+            inconsistencyResolutionRetryBackoffMultiplierInMillis;
         this.sleeper = sleeper;
         this.random = random;
     }
 
-    @Override
-    public Shard shard(@NonNull final String shardId) {
+    @Override public Shard shard(@NonNull final String shardId) {
         if (this.listOfShardsSinceLastGet.get() == null) {
             //Update this.listOfShardsSinceLastGet as needed.
             listShards();
         }
 
         for (Shard shard : listOfShardsSinceLastGet.get()) {
-            if (shard.shardId().equals(shardId))  {
+            if (shard.shardId().equals(shardId)) {
                 return shard;
             }
         }
@@ -92,12 +90,17 @@ public class StreamsShardDetector implements ShardDetector {
         return null;
     }
 
-    public DescribeStreamResponse getStreamInfo(String startShardId)
-        throws ResourceNotFoundException, LimitExceededException {
-        final DescribeStreamRequest describeStreamRequest = DescribeStreamRequest.builder()
-            .streamName(streamName)
-            .exclusiveStartShardId(startShardId)
-            .build();
+    public DescribeStreamResponse getStreamInfo(String startShardId) throws
+        ResourceNotFoundException,
+        LimitExceededException {
+        final ExceptionManager exceptionManager = new ExceptionManager();
+        exceptionManager.add(software.amazon.awssdk.services.dynamodb.model.LimitExceededException.class, t -> t);
+        exceptionManager.add(software.amazon.awssdk.services.dynamodb.model.ResourceInUseException.class, t -> t);
+        exceptionManager.add(software.amazon.awssdk.services.dynamodb.model.DynamoDbException.class, t -> t);
+        exceptionManager.add(KinesisException.class, t -> t);
+        final DescribeStreamRequest
+            describeStreamRequest =
+            DescribeStreamRequest.builder().streamName(streamName).exclusiveStartShardId(startShardId).build();
         DescribeStreamResponse response = null;
 
         LimitExceededException lastException = null;
@@ -108,7 +111,8 @@ public class StreamsShardDetector implements ShardDetector {
             try {
                 response = kinesisClient.describeStream(describeStreamRequest).get();
             } catch (LimitExceededException le) {
-                //LOG.info("Got LimitExceededException when describing stream " + streamName + ". Backing off for " + this.describeStreamBackoffTimeInMillis + " millis.");
+                //LOG.info("Got LimitExceededException when describing stream " + streamName + ". Backing off for " +
+                // this.describeStreamBackoffTimeInMillis + " millis.");
                 sleeper.sleep(this.describeStreamBackoffTimeInMillis);
                 lastException = le;
             } catch (InterruptedException e) {
@@ -126,18 +130,17 @@ public class StreamsShardDetector implements ShardDetector {
         }
 
         final String streamStatus = response.streamDescription().streamStatusAsString();
-        if (StreamStatus.ACTIVE.toString().equals(streamStatus)
-            || StreamStatus.UPDATING.toString().equals(streamStatus)) {
+        if (StreamStatus.ACTIVE.toString().equals(streamStatus) || StreamStatus.UPDATING.toString()
+            .equals(streamStatus)) {
             return response;
         } else {
-            //LOG.info("Stream is in status " + streamStatus + ", DescribeStream returning null (wait until stream is Active or Updating");
+            //LOG.info("Stream is in status " + streamStatus + ", DescribeStream returning null (wait until stream is
+            // Active or Updating");
             return null;
         }
     }
 
-    @Override
-    @Synchronized
-    public List<Shard> listShards() {
+    @Override @Synchronized public List<Shard> listShards() {
         if (shardGraph == null) {
             shardGraph = new ShardGraph();
         }
@@ -155,7 +158,8 @@ public class StreamsShardDetector implements ShardDetector {
             int retryAttempt = 0;
             while (shardGraph.closedLeafNodeCount() > 0 && retryAttempt < maxRetriesToResolveInconsistencies) {
                 final long backOffTime = getInconsistencyBackoffTimeInMillis(retryAttempt);
-                //String infoMsg = String.format("Inconsistency resolution retry attempt: %d. Backing off for %d millis.", retryAttempt, backOffTime);
+                //String infoMsg = String.format("Inconsistency resolution retry attempt: %d. Backing off for %d
+                // millis.", retryAttempt, backOffTime);
                 //LOG.info(infoMsg);
                 sleeper.sleep(backOffTime);
                 ShardGraphProcessingResult shardGraphProcessingResult = resolveInconsistenciesInShardGraph();
@@ -163,7 +167,9 @@ public class StreamsShardDetector implements ShardDetector {
                     //LOG.info("Stream was disabled during getShardList operation.");
                     return null;
                 } else if (shardGraphProcessingResult.equals(ShardGraphProcessingResult.RESOLVED_INCONSISTENCIES_AND_ABORTED)) {
-                    //infoMsg = String.format("An intermediate page in DescribeStream response resolved inconsistencies. " + "Total retry attempts taken to resolve inconsistencies: %d", retryAttempt + 1);
+                    //infoMsg = String.format("An intermediate page in DescribeStream response resolved
+                    // inconsistencies. " + "Total retry attempts taken to resolve inconsistencies: %d", retryAttempt
+                    // + 1);
                     //LOG.info(infoMsg);
                     break;
                 }
@@ -174,8 +180,10 @@ public class StreamsShardDetector implements ShardDetector {
             }
         } else {
             if (shardGraph.closedLeafNodeCount() > 0) {
-                String msg = String.format("Returning shard list with %s closed leaf node shards.",
-                    shardGraph.closedLeafNodeCount());
+                String
+                    msg =
+                    String.format("Returning shard list with %s closed leaf node shards.",
+                        shardGraph.closedLeafNodeCount());
                 // LOG.debug(msg);
             }
         }
@@ -211,8 +219,11 @@ public class StreamsShardDetector implements ShardDetector {
 
     private ShardGraphProcessingResult resolveInconsistenciesInShardGraph() {
         DescribeStreamResponse response;
-        final String warnMsg = String.format("Inconsistent shard graph state detected. "
-            + "Fetched: %d shards. Closed leaves: %d shards", shardGraph.size(), shardGraph.closedLeafNodeCount());
+        final String
+            warnMsg =
+            String.format("Inconsistent shard graph state detected. " + "Fetched: %d shards. Closed leaves: %d shards",
+                shardGraph.size(),
+                shardGraph.closedLeafNodeCount());
         //LOG.warn(warnMsg);
         /*if (LOG.isDebugEnabled()) {
             final String debugMsg = String.format("Following leaf node shards are closed: %s",
@@ -226,7 +237,8 @@ public class StreamsShardDetector implements ShardDetector {
                 return ShardGraphProcessingResult.STREAM_DISABLED;
             } else {
                 shardGraph.addToClosedLeafNodes(response.streamDescription().shards());
-                //LOG.debug(String.format("Resolving inconsistencies in shard graph; total shard count: %d", shardGraph.size()));
+                //LOG.debug(String.format("Resolving inconsistencies in shard graph; total shard count: %d",
+                // shardGraph.size()));
                 if (shardGraph.closedLeafNodeCount() == 0) {
                     return ShardGraphProcessingResult.RESOLVED_INCONSISTENCIES_AND_ABORTED;
                 }
@@ -236,17 +248,14 @@ public class StreamsShardDetector implements ShardDetector {
         return ShardGraphProcessingResult.FETCHED_ALL_AVAILABLE_SHARDS;
     }
 
-    @VisibleForTesting
-    long getInconsistencyBackoffTimeInMillis(int retryAttempt) {
+    @VisibleForTesting long getInconsistencyBackoffTimeInMillis(int retryAttempt) {
         double baseMultiplier = isInconsistencyResolutionRetryBackoffJitterEnabled ? random.nextDouble() : 1.0;
-        return (long)(baseMultiplier * inconsistencyResolutionRetryBackoffBaseInMillis) +
-            (long)Math.pow(2.0, retryAttempt) * inconsistencyResolutionRetryBackoffMultiplierInMillis;
+        return (long) (baseMultiplier * inconsistencyResolutionRetryBackoffBaseInMillis)
+            + (long) Math.pow(2.0, retryAttempt) * inconsistencyResolutionRetryBackoffMultiplierInMillis;
     }
 
     private enum ShardGraphProcessingResult {
-        STREAM_DISABLED,
-        FETCHED_ALL_AVAILABLE_SHARDS,
-        RESOLVED_INCONSISTENCIES_AND_ABORTED
+        STREAM_DISABLED, FETCHED_ALL_AVAILABLE_SHARDS, RESOLVED_INCONSISTENCIES_AND_ABORTED
     }
 
     private static class ShardNode {
@@ -269,8 +278,7 @@ public class StreamsShardDetector implements ShardDetector {
         }
 
         boolean isShardClosed() {
-            return shard.sequenceNumberRange() != null &&
-                shard.sequenceNumberRange().endingSequenceNumber() != null;
+            return shard.sequenceNumberRange() != null && shard.sequenceNumberRange().endingSequenceNumber() != null;
         }
 
         boolean addDescendant(String shardId) {
@@ -305,16 +313,18 @@ public class StreamsShardDetector implements ShardDetector {
 
         /**
          * Adds a list of shards to the graph.
+         *
          * @param shards List of shards to be added to the graph.
          */
         private void addNodes(List<Shard> shards) {
             if (null == shards) {
                 return;
             }
-//            if (LOG.isDebugEnabled()) {
-//                LOG.debug(String.format("Updating the graph with the following shards: \n %s",
-//                    String.join(", ", shards.stream().map(Shard::getShardId).collect(Collectors.toList()))));
-//            }
+            //            if (LOG.isDebugEnabled()) {
+            //                LOG.debug(String.format("Updating the graph with the following shards: \n %s",
+            //                    String.join(", ", shards.stream().map(Shard::getShardId).collect(Collectors.toList
+            //                    ()))));
+            //            }
             for (Shard shard : shards) {
                 addNode(shard);
             }
@@ -324,16 +334,19 @@ public class StreamsShardDetector implements ShardDetector {
         /**
          * Adds descendants only to closed leaf nodes in order to ensure all leaf nodes in
          * the graph are open.
+         *
          * @param shards list of shards obtained from DescribeStream call.
          */
         private void addToClosedLeafNodes(List<Shard> shards) {
             if (null == shards) {
                 return;
             }
-//            if (LOG.isDebugEnabled()) {
-//                LOG.debug(String.format("Attempting to resolve inconsistencies in the graph with the following shards: \n %s",
-//                    String.join(", ", shards.stream().map(Shard::getShardId).collect(Collectors.toList()))));
-//            }
+            //            if (LOG.isDebugEnabled()) {
+            //                LOG.debug(String.format("Attempting to resolve inconsistencies in the graph with the
+            //                following shards: \n %s",
+            //                    String.join(", ", shards.stream().map(Shard::getShardId).collect(Collectors.toList
+            //                    ()))));
+            //            }
             for (Shard shard : shards) {
                 final String parentShardId = shard.parentShardId();
                 if (null != parentShardId && closedLeafNodeIds.contains(parentShardId)) {

@@ -16,40 +16,28 @@
 package software.amazon.services.dynamodb.streamsadapter.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import software.amazon.awssdk.core.SdkBytes;
-import software.amazon.services.dynamodb.streamsadapter.model.RecordObjectMapper;
-import software.amazon.awssdk.services.dynamodb.model.ListStreamsRequest;
-import software.amazon.awssdk.services.dynamodb.model.GetShardIteratorRequest;
-import software.amazon.awssdk.services.dynamodb.model.DescribeStreamRequest;
-import software.amazon.awssdk.services.dynamodb.model.GetRecordsRequest;
-import software.amazon.awssdk.services.dynamodb.model.ShardIteratorType;
-import software.amazon.awssdk.services.dynamodb.model.Shard;
-import software.amazon.awssdk.services.dynamodb.model.StreamStatus;
-import software.amazon.awssdk.services.dynamodb.model.ListStreamsResponse;
-import software.amazon.awssdk.services.dynamodb.model.GetShardIteratorResponse;
-import software.amazon.awssdk.services.dynamodb.model.DescribeStreamResponse;
-import software.amazon.awssdk.services.dynamodb.model.GetRecordsResponse;
-import software.amazon.awssdk.services.dynamodb.model.Stream;
-import software.amazon.awssdk.services.dynamodb.model.Record;
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-
-import software.amazon.awssdk.services.dynamodb.model.StreamDescription;
-
-import java.util.Map;
-import java.util.EnumMap;
-import java.util.stream.Collectors;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.services.dynamodb.model.*;
+
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 // TODO: No static methods. immutable map
 
 public class RequestResponseTranslator {
-    private static final Map<software.amazon.awssdk.services.kinesis.model.ShardIteratorType, ShardIteratorType> shardIteratorTypeMap =
+    private static final Map<software.amazon.awssdk.services.kinesis.model.ShardIteratorType, ShardIteratorType>
+        shardIteratorTypeMap =
         new EnumMap<>(software.amazon.awssdk.services.kinesis.model.ShardIteratorType.class);
 
-    private static final Map<StreamStatus, software.amazon.awssdk.services.kinesis.model.StreamStatus> streamStatusMap =
+    private static final Map<StreamStatus, software.amazon.awssdk.services.kinesis.model.StreamStatus>
+        streamStatusMap =
         new EnumMap<>(StreamStatus.class);
 
-    private static final ObjectMapper MAPPER = new RecordObjectMapper();
+    private static final ObjectMapper MAPPER = new RecordObjectMapper(new JavaTimeModule());
 
     static {
         shardIteratorTypeMap.put(software.amazon.awssdk.services.kinesis.model.ShardIteratorType.AFTER_SEQUENCE_NUMBER,
@@ -101,15 +89,19 @@ public class RequestResponseTranslator {
     }
 
     public software.amazon.awssdk.services.kinesis.model.Shard translate(Shard shard) {
-        software.amazon.awssdk.services.kinesis.model.SequenceNumberRange sequenceNumberRange = software.amazon.awssdk.services.kinesis.model.SequenceNumberRange.builder()
-            .startingSequenceNumber(shard.sequenceNumberRange().startingSequenceNumber())
-            .endingSequenceNumber(shard.sequenceNumberRange().endingSequenceNumber())
-            .build();
+        software.amazon.awssdk.services.kinesis.model.SequenceNumberRange
+            sequenceNumberRange =
+            software.amazon.awssdk.services.kinesis.model.SequenceNumberRange.builder()
+                .startingSequenceNumber(shard.sequenceNumberRange().startingSequenceNumber())
+                .endingSequenceNumber(shard.sequenceNumberRange().endingSequenceNumber())
+                .build();
 
-        software.amazon.awssdk.services.kinesis.model.HashKeyRange hashKeyRange = software.amazon.awssdk.services.kinesis.model.HashKeyRange.builder()
-            .startingHashKey(java.math.BigInteger.ZERO.toString())
-            .endingHashKey(java.math.BigInteger.ONE.toString())
-            .build();
+        software.amazon.awssdk.services.kinesis.model.HashKeyRange
+            hashKeyRange =
+            software.amazon.awssdk.services.kinesis.model.HashKeyRange.builder()
+                .startingHashKey(java.math.BigInteger.ZERO.toString())
+                .endingHashKey(java.math.BigInteger.ONE.toString())
+                .build();
 
         return software.amazon.awssdk.services.kinesis.model.Shard.builder()
             .shardId(shard.shardId())
@@ -149,31 +141,22 @@ public class RequestResponseTranslator {
     }
 
     public software.amazon.awssdk.services.kinesis.model.Record translate(Record record) {
-        String value = record.dynamodb().newImage().toString();
-        //byte[] result = new byte[]{value};
+        //MAPPER.registerModule(new JavaTimeModule());
+        MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         try {
             return software.amazon.awssdk.services.kinesis.model.Record.builder()
                 .approximateArrivalTimestamp(record.dynamodb().approximateCreationDateTime())
                 .sequenceNumber(record.dynamodb().sequenceNumber())
-                //.data(SdkBytes.fromByteArray(MAPPER.writeValueAsBytes(record)))
-                .data(SdkBytes.fromUtf8String(value))
-                //.data(SdkBytes.fromByteArray(result))
+                .data(SdkBytes.fromByteArray(MAPPER.writeValueAsBytes(record.toBuilder())))
                 .build();
-        }
-//        catch (JsonProcessingException e) {
-//            final String errorMessage = "Failed to serialize stream record to JSON";
-//            // LOG.error(errorMessage, e);
-//            throw new RuntimeException(errorMessage, e);
-//        }
-        catch (Exception d) {
-            d.printStackTrace();
-            System.out.println("hole");
-            throw new RuntimeException("sdasadasdas", d);
+        } catch (JsonProcessingException e) {
+            final String errorMessage = "Failed to serialize stream record to JSON";
+            // LOG.error(errorMessage, e);
+            throw new RuntimeException(errorMessage, e);
         }
     }
 
     public software.amazon.awssdk.services.kinesis.model.GetRecordsResponse translate(GetRecordsResponse dynamoDBResponse) {
-        //System.out.println("getRecords transaformation");
         return software.amazon.awssdk.services.kinesis.model.GetRecordsResponse.builder()
             .records(dynamoDBResponse.records().stream().map(this::translate).collect(Collectors.toList()))
             .nextShardIterator(dynamoDBResponse.nextShardIterator())

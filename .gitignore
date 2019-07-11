@@ -1,6 +1,6 @@
 target/
 AwsCredentials.properties
-/.idea
+.idea/
 *.iml
 *~
 .*~
