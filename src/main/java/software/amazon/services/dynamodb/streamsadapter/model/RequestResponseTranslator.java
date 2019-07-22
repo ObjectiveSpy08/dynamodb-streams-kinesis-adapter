@@ -141,7 +141,7 @@ public class RequestResponseTranslator {
     }
 
     public software.amazon.awssdk.services.kinesis.model.Record translate(Record record) {
-        //MAPPER.registerModule(new JavaTimeModule());
+        MAPPER.registerModule(new JavaTimeModule());
         MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         try {
             return software.amazon.awssdk.services.kinesis.model.Record.builder()

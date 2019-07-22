@@ -32,8 +32,25 @@ import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Data public class StreamsLeaseManagementFactory implements LeaseManagementFactory {
-    // The LeaseManagementFactory interface doesnt have all the methods we need like the ones we pass while creating
-    // the ShardSyncTaskManager.
+    private static final int DEFAULT_MAX_RETRIES_TO_RESOLVE_INCONSISTENCIES = 8;
+    private static final int DEFAULT_DESCRIBE_STREAM_RETRY_TIMES = 50;
+    private static final long DEFAULT_DESCRIBE_STREAM_BACKOFF_MILLIS = 1000L;
+    /**
+     * If jitter is not enabled, the default combination of DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_BASE_MILLIS,
+     * DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_MULTIPLIER_MILLIS and,
+     * DEFAULT_MAX_RETRIES_TO_RESOLVE_INCONSISTENCIES is such that retries for fixing
+     * shard graph occur for a little more than 60 seconds. The sequence obtained for 8 retries starting from 0 and
+     * ending at 7 is {1400, 1600, 2000, 2800, 4400, 7600, 14000, 26800}, the cumulative sum sequence, or total
+     * duration sums for which is {1400, 3000, 5000, 7800, 12200, 19800, 33800, 60600}.
+     */
+    private static final boolean DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_JITTER_ENABLED = true;
+    // Base for exponential back-off
+    private static final long DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_BASE_MILLIS = 1200L;
+    // Multiplier for exponential back-off
+    private static final long DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_MULTIPLIER_MILLIS = 200L;
+
+    // The LeaseManagementFactory interface doesnt have all the methods we need like the ones we pass while creating the ShardSyncTaskManager.
+    // So we keep the type as DynamoDBLeaseManagementFactory.
     private DynamoDBLeaseManagementFactory internalFactory;
     private KinesisAsyncClient kinesisClient;
     private String streamName;
@@ -80,6 +97,15 @@ import java.util.concurrent.ThreadLocalRandom;
         if (null == random) {
             random = ThreadLocalRandom.current();
         }
-        return new StreamsShardDetector(kinesisClient, streamName, 8, 50, 1000L, true, 1200L, 200L, sleeper, random);
+        return new StreamsShardDetector(kinesisClient,
+            streamName,
+            DEFAULT_MAX_RETRIES_TO_RESOLVE_INCONSISTENCIES,
+            DEFAULT_DESCRIBE_STREAM_RETRY_TIMES,
+            DEFAULT_DESCRIBE_STREAM_BACKOFF_MILLIS,
+            DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_JITTER_ENABLED,
+            DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_BASE_MILLIS,
+            DEFAULT_INCONSISTENCY_RESOLUTION_RETRY_BACKOFF_MULTIPLIER_MILLIS,
+            sleeper,
+            random);
     }
 }

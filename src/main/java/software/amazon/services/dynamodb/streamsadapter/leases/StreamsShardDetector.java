@@ -20,13 +20,19 @@ import lombok.NonNull;
 import lombok.Synchronized;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
+import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.model.*;
 import software.amazon.kinesis.leases.ShardDetector;
 import software.amazon.services.dynamodb.streamsadapter.exceptions.ExceptionManager;
 import software.amazon.services.dynamodb.streamsadapter.utils.Sleeper;
-
-import java.util.*;
+import java.util.Random;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.TreeSet;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -37,6 +43,7 @@ import java.util.stream.Collectors;
 @Slf4j @Accessors(fluent = true) public class StreamsShardDetector implements ShardDetector {
 
     private static final long MAX_SHARD_COUNT_TO_TRIGGER_RETRIES = 1500L;
+
     @NonNull private final KinesisAsyncClient kinesisClient;
     @NonNull private final String streamName;
     private final int maxRetriesToResolveInconsistencies;
@@ -50,16 +57,16 @@ import java.util.stream.Collectors;
     private final AtomicReference<List<Shard>> listOfShardsSinceLastGet = new AtomicReference<>();
     private ShardGraph shardGraph;
 
-    public StreamsShardDetector(KinesisAsyncClient kinesisClient,
-        String streamName,
-        int maxRetriesToResolveInconsistencies,
-        int maxDescribeStreamRetryAttempts,
-        long describeStreamBackoffTimeInMillis,
-        boolean isDefaultInconsistencyResolutionRetryBackoffJitterEnabled,
-        long inconsistencyResolutionRetryBackoffBaseInMillis,
-        long inconsistencyResolutionRetryBackoffMultiplierInMillis,
-        Sleeper sleeper,
-        Random random) {
+    public StreamsShardDetector(final KinesisAsyncClient kinesisClient,
+        final String streamName,
+        final int maxRetriesToResolveInconsistencies,
+        final int maxDescribeStreamRetryAttempts,
+        final long describeStreamBackoffTimeInMillis,
+        final boolean isDefaultInconsistencyResolutionRetryBackoffJitterEnabled,
+        final long inconsistencyResolutionRetryBackoffBaseInMillis,
+        final long inconsistencyResolutionRetryBackoffMultiplierInMillis,
+        final Sleeper sleeper,
+        final Random random) {
         this.kinesisClient = kinesisClient;
         this.streamName = streamName;
         this.maxRetriesToResolveInconsistencies = maxRetriesToResolveInconsistencies;
@@ -74,7 +81,8 @@ import java.util.stream.Collectors;
         this.random = random;
     }
 
-    @Override public Shard shard(@NonNull final String shardId) {
+    @Override
+    public Shard shard(@NonNull final String shardId) {
         if (this.listOfShardsSinceLastGet.get() == null) {
             //Update this.listOfShardsSinceLastGet as needed.
             listShards();
@@ -90,17 +98,15 @@ import java.util.stream.Collectors;
         return null;
     }
 
-    public DescribeStreamResponse getStreamInfo(String startShardId) throws
-        ResourceNotFoundException,
-        LimitExceededException {
+    private DescribeStreamResponse getStreamInfo(final String startShardId){
         final ExceptionManager exceptionManager = new ExceptionManager();
-        exceptionManager.add(software.amazon.awssdk.services.dynamodb.model.LimitExceededException.class, t -> t);
-        exceptionManager.add(software.amazon.awssdk.services.dynamodb.model.ResourceInUseException.class, t -> t);
-        exceptionManager.add(software.amazon.awssdk.services.dynamodb.model.DynamoDbException.class, t -> t);
+        exceptionManager.add(LimitExceededException.class, t -> t);
+        exceptionManager.add(ResourceNotFoundException.class, t -> t);
         exceptionManager.add(KinesisException.class, t -> t);
-        final DescribeStreamRequest
-            describeStreamRequest =
-            DescribeStreamRequest.builder().streamName(streamName).exclusiveStartShardId(startShardId).build();
+        exceptionManager.add(SdkException.class, t -> t);
+
+
+        final DescribeStreamRequest describeStreamRequest = DescribeStreamRequest.builder().streamName(streamName).exclusiveStartShardId(startShardId).build();
         DescribeStreamResponse response = null;
 
         LimitExceededException lastException = null;
@@ -109,16 +115,18 @@ import java.util.stream.Collectors;
         // Call DescribeStream, with backoff and retries (if we get LimitExceededException).
         while (response == null) {
             try {
-                response = kinesisClient.describeStream(describeStreamRequest).get();
+                try {
+                    response = kinesisClient.describeStream(describeStreamRequest).get();
+                } catch (InterruptedException e) {
+                    log.debug("Interrupted exception caught, shutdown initiated, returning null");
+                } catch (ExecutionException e) {
+                    throw exceptionManager.apply(e.getCause());
+                }
             } catch (LimitExceededException le) {
                 //LOG.info("Got LimitExceededException when describing stream " + streamName + ". Backing off for " +
                 // this.describeStreamBackoffTimeInMillis + " millis.");
                 sleeper.sleep(this.describeStreamBackoffTimeInMillis);
                 lastException = le;
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            } catch (ExecutionException e) {
-                e.printStackTrace();
             }
             remainingRetryTimes--;
             if (remainingRetryTimes == 0 && response == null) {

@@ -4,23 +4,22 @@ import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsAsyncClient;
 import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
 import software.amazon.awssdk.services.kinesis.model.*;
-import software.amazon.awssdk.services.kinesis.paginators.ListStreamConsumersPublisher;
+import software.amazon.awssdk.utils.CompletableFutureUtils;
 import software.amazon.services.dynamodb.streamsadapter.exceptions.ExceptionTranslator;
 import software.amazon.services.dynamodb.streamsadapter.model.RequestResponseTranslator;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.function.Consumer;
 
 public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
 
     private static final Integer GET_RECORDS_LIMIT = 1000;
-    private static final RequestResponseTranslator requestResponseTranslator = new RequestResponseTranslator();
-    private static final ExceptionTranslator exceptionTranslator = new ExceptionTranslator();
-    private final DynamoDbStreamsAsyncClient internalClient;
+    private final RequestResponseTranslator requestResponseTranslator = new RequestResponseTranslator();
+    private final ExceptionTranslator exceptionTranslator = new ExceptionTranslator();
     private SkipRecordsBehavior skipRecordsBehavior = SkipRecordsBehavior.SKIP_RECORDS_TO_TRIM_HORIZON;
+    private final DynamoDbStreamsAsyncClient internalClient;
 
-    public DynamoDBStreamsAsyncClientAdapter(DynamoDbStreamsAsyncClient client) {
+    public DynamoDBStreamsAsyncClientAdapter(final DynamoDbStreamsAsyncClient client) {
         internalClient = client;
     }
 
@@ -42,9 +41,8 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
         } catch (InterruptedException e) {
             return null;
         } catch (ExecutionException e) {
-            if (!(e.getCause() instanceof AwsServiceException))
-                throw new RuntimeException(e.getCause());
-            throw exceptionTranslator.translateDescribeStreamException((AwsServiceException) e.getCause());
+            Throwable t = e.getCause();
+            return CompletableFutureUtils.failedFuture(t instanceof AwsServiceException ? exceptionTranslator.translateDescribeStreamException((AwsServiceException) t) : t);
         }
         return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
     }
@@ -67,10 +65,9 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
         } catch (InterruptedException e) {
             return null;
         } catch (ExecutionException e) {
-            if (!(e.getCause() instanceof AwsServiceException))
-                throw new RuntimeException(e.getCause());
-            throw exceptionTranslator.translateGetRecordsException((AwsServiceException) e.getCause(),
-                skipRecordsBehavior);
+            Throwable t = e.getCause();
+            return CompletableFutureUtils.failedFuture(t instanceof AwsServiceException ? exceptionTranslator.translateGetRecordsException((AwsServiceException) t,
+                skipRecordsBehavior) : t);
         }
 
         return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
@@ -85,12 +82,9 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
         } catch (InterruptedException e) {
             return null;
         } catch (ExecutionException e) {
-            if (!(e.getCause() instanceof AwsServiceException))
-                throw new RuntimeException(e.getCause());
+            Throwable t = e.getCause();
 
-            AwsServiceException exception = (AwsServiceException) e.getCause();
-
-            if (exception instanceof software.amazon.awssdk.services.dynamodb.model.TrimmedDataAccessException
+            if (t instanceof software.amazon.awssdk.services.dynamodb.model.TrimmedDataAccessException
                 && skipRecordsBehavior == SkipRecordsBehavior.SKIP_RECORDS_TO_TRIM_HORIZON
                 && !getShardIteratorRequest.shardIteratorTypeAsString()
                 .equals(ShardIteratorType.TRIM_HORIZON.toString())) {
@@ -103,8 +97,8 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
                     .build());
             }
 
-            throw exceptionTranslator.translateGetShardIteratorException((AwsServiceException) e.getCause(),
-                skipRecordsBehavior);
+            return CompletableFutureUtils.failedFuture(t instanceof AwsServiceException ? exceptionTranslator.translateGetShardIteratorException((AwsServiceException) t,
+                skipRecordsBehavior) : t);
         }
         return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
     }
@@ -116,9 +110,8 @@ public class DynamoDBStreamsAsyncClientAdapter implements KinesisAsyncClient {
         } catch (InterruptedException e) {
             return null;
         } catch (ExecutionException e) {
-            if (!(e.getCause() instanceof AwsServiceException))
-                throw new RuntimeException(e.getCause());
-            throw exceptionTranslator.translateListStreamsException((AwsServiceException) e.getCause());
+            Throwable t = e.getCause();
+            return CompletableFutureUtils.failedFuture(t instanceof AwsServiceException ? exceptionTranslator.translateListStreamsException((AwsServiceException) t) : t);
         }
         return CompletableFuture.completedFuture(requestResponseTranslator.translate(response));
     }

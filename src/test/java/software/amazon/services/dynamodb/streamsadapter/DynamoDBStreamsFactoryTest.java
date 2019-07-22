@@ -5,7 +5,10 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import static org.mockito.Mockito.verify;
-import org.powermock.api.mockito.PowerMockito;
+import static org.powermock.api.mockito.PowerMockito.mock;
+import static org.powermock.api.mockito.PowerMockito.whenNew;
+import static org.powermock.api.mockito.PowerMockito.verifyNew;
+import static org.powermock.api.mockito.PowerMockito.when;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchAsyncClient;
@@ -45,8 +48,8 @@ import software.amazon.services.dynamodb.streamsadapter.processor.DynamoDBStream
 
     @Test public void createConfigsBuilder() throws Exception {
         // Phase 1: Setup
-        ConfigsBuilder mockConfigsBuilder = PowerMockito.mock(ConfigsBuilder.class);
-        PowerMockito.whenNew(ConfigsBuilder.class).withAnyArguments().thenReturn(mockConfigsBuilder);
+        ConfigsBuilder mockConfigsBuilder = mock(ConfigsBuilder.class);
+        whenNew(ConfigsBuilder.class).withAnyArguments().thenReturn(mockConfigsBuilder);
 
         // Phase 2: Exercise
         ConfigsBuilder
@@ -60,7 +63,7 @@ import software.amazon.services.dynamodb.streamsadapter.processor.DynamoDBStream
                 streamsShardRecordProcessorFactory);
 
         // Phase 3: Verification
-        PowerMockito.verifyNew(ConfigsBuilder.class)
+        verifyNew(ConfigsBuilder.class)
             .withArguments(streamName,
                 applicationName,
                 kinesisClient,
@@ -73,33 +76,33 @@ import software.amazon.services.dynamodb.streamsadapter.processor.DynamoDBStream
 
     @Test public void createScheduler_configsBuilderParam() throws Exception {
         // Phase 1: Setup
-        Scheduler mockScheduler = PowerMockito.mock(Scheduler.class);
-        StreamsLeaseManagementFactory mockStreamsLeaseManagementFactory = PowerMockito.mock(StreamsLeaseManagementFactory.class);
-        PollingConfig mockPollingConfig = PowerMockito.mock(PollingConfig.class);
+        Scheduler mockScheduler = mock(Scheduler.class);
+        StreamsLeaseManagementFactory mockStreamsLeaseManagementFactory = mock(StreamsLeaseManagementFactory.class);
+        PollingConfig mockPollingConfig = mock(PollingConfig.class);
 
-        PowerMockito.whenNew(Scheduler.class).withAnyArguments().thenReturn(mockScheduler);
-        PowerMockito.whenNew(StreamsLeaseManagementFactory.class).withAnyArguments().thenReturn(mockStreamsLeaseManagementFactory);
-        PowerMockito.whenNew(PollingConfig.class).withAnyArguments().thenReturn(mockPollingConfig);
+        whenNew(Scheduler.class).withAnyArguments().thenReturn(mockScheduler);
+        whenNew(StreamsLeaseManagementFactory.class).withAnyArguments().thenReturn(mockStreamsLeaseManagementFactory);
+        whenNew(PollingConfig.class).withAnyArguments().thenReturn(mockPollingConfig);
 
-        PowerMockito.when(configsBuilder.leaseManagementConfig()).thenReturn(leaseManagementConfig);
-        PowerMockito.when(configsBuilder.retrievalConfig()).thenReturn(retrievalConfig);
-        PowerMockito.when(leaseManagementConfig.leaseManagementFactory(mockStreamsLeaseManagementFactory)).thenReturn(leaseManagementConfig);
-        PowerMockito.when(retrievalConfig.retrievalSpecificConfig(mockPollingConfig)).thenReturn(retrievalConfig);
+        when(configsBuilder.leaseManagementConfig()).thenReturn(leaseManagementConfig);
+        when(configsBuilder.retrievalConfig()).thenReturn(retrievalConfig);
+        when(leaseManagementConfig.leaseManagementFactory(mockStreamsLeaseManagementFactory)).thenReturn(leaseManagementConfig);
+        when(retrievalConfig.retrievalSpecificConfig(mockPollingConfig)).thenReturn(retrievalConfig);
 
         // Phase 2: Exercise
         Scheduler scheduler = DynamoDBStreamsFactory.createScheduler(configsBuilder);
 
         // Phase 3: Verification
-        PowerMockito.verifyNew(Scheduler.class)
+        verifyNew(Scheduler.class)
             .withArguments(configsBuilder.checkpointConfig(), configsBuilder.coordinatorConfig(),
                 leaseManagementConfig, configsBuilder.lifecycleConfig(),
                 configsBuilder.metricsConfig(), configsBuilder.processorConfig(),
                 retrievalConfig);
 
-        PowerMockito.verifyNew(StreamsLeaseManagementFactory.class)
+        verifyNew(StreamsLeaseManagementFactory.class)
             .withArguments(leaseManagementConfig.leaseManagementFactory(), leaseManagementConfig.kinesisClient(), leaseManagementConfig.streamName());
 
-        PowerMockito.verifyNew(PollingConfig.class)
+        verifyNew(PollingConfig.class)
             .withArguments(configsBuilder.streamName(),configsBuilder.kinesisClient());
 
         verify(leaseManagementConfig).leaseManagementFactory(mockStreamsLeaseManagementFactory);
@@ -110,16 +113,16 @@ import software.amazon.services.dynamodb.streamsadapter.processor.DynamoDBStream
 
     @Test public void createScheduler_allConfigParam() throws Exception {
         // Phase 1: Setup
-        Scheduler mockScheduler = PowerMockito.mock(Scheduler.class);
-        StreamsLeaseManagementFactory mockStreamsLeaseManagementFactory = PowerMockito.mock(StreamsLeaseManagementFactory.class);
-        PollingConfig mockPollingConfig = PowerMockito.mock(PollingConfig.class);
+        Scheduler mockScheduler = mock(Scheduler.class);
+        StreamsLeaseManagementFactory mockStreamsLeaseManagementFactory = mock(StreamsLeaseManagementFactory.class);
+        PollingConfig mockPollingConfig = mock(PollingConfig.class);
 
-        PowerMockito.whenNew(Scheduler.class).withAnyArguments().thenReturn(mockScheduler);
-        PowerMockito.whenNew(StreamsLeaseManagementFactory.class).withAnyArguments().thenReturn(mockStreamsLeaseManagementFactory);
-        PowerMockito.whenNew(PollingConfig.class).withAnyArguments().thenReturn(mockPollingConfig);
+        whenNew(Scheduler.class).withAnyArguments().thenReturn(mockScheduler);
+        whenNew(StreamsLeaseManagementFactory.class).withAnyArguments().thenReturn(mockStreamsLeaseManagementFactory);
+        whenNew(PollingConfig.class).withAnyArguments().thenReturn(mockPollingConfig);
 
-        PowerMockito.when(leaseManagementConfig.leaseManagementFactory(mockStreamsLeaseManagementFactory)).thenReturn(leaseManagementConfig);
-        PowerMockito.when(retrievalConfig.retrievalSpecificConfig(mockPollingConfig)).thenReturn(retrievalConfig);
+        when(leaseManagementConfig.leaseManagementFactory(mockStreamsLeaseManagementFactory)).thenReturn(leaseManagementConfig);
+        when(retrievalConfig.retrievalSpecificConfig(mockPollingConfig)).thenReturn(retrievalConfig);
 
         // Phase 2: Exercise
         Scheduler scheduler = DynamoDBStreamsFactory.createScheduler(checkpointConfig,
@@ -131,17 +134,17 @@ import software.amazon.services.dynamodb.streamsadapter.processor.DynamoDBStream
             retrievalConfig);
 
         // Phase 3: Verification
-        PowerMockito.verifyNew(Scheduler.class)
+        verifyNew(Scheduler.class)
             .withArguments(checkpointConfig, coordinatorConfig,
                 leaseManagementConfig, lifecycleConfig,
                 metricsConfig, processorConfig,
                 retrievalConfig);
 
-        PowerMockito.verifyNew(StreamsLeaseManagementFactory.class)
+        verifyNew(StreamsLeaseManagementFactory.class)
             .withArguments(leaseManagementConfig.leaseManagementFactory(), leaseManagementConfig.kinesisClient(), leaseManagementConfig.streamName());
 
-        PowerMockito.verifyNew(PollingConfig.class)
-            .withArguments(configsBuilder.streamName(),configsBuilder.kinesisClient());
+        verifyNew(PollingConfig.class)
+            .withArguments(configsBuilder.streamName(), configsBuilder.kinesisClient());
 
         verify(leaseManagementConfig).leaseManagementFactory(mockStreamsLeaseManagementFactory);
         verify(retrievalConfig).retrievalSpecificConfig(mockPollingConfig);
