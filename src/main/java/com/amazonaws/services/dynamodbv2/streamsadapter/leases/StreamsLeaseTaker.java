@@ -10,6 +10,7 @@ import com.amazonaws.services.kinesis.leases.interfaces.ILeaseManager;
 import com.amazonaws.services.kinesis.leases.interfaces.ILeaseTaker;
 import com.amazonaws.services.kinesis.leases.interfaces.LeaseSelector;
 
+import com.amazonaws.util.CollectionUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
@@ -25,6 +26,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * DynamoDBStreams implementation of ILeaseTaker. Contains logic for taking and load-balancing leases.
@@ -142,7 +144,7 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
 
         Set<T> leasesToTake;
         try {
-            leasesToTake = computeLeasesToTake(expiredLeases);
+            leasesToTake = getLeasesToTake(expiredLeases);
         } catch (ProvisionedThroughputException e) {
             LOG.info(String.format("Worker %s could not compute leases to take due to capacity",
                 workerIdentifier));
@@ -186,6 +188,7 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
                 stringJoin(untakenLeaseKeys, ", ")));
         }
         return takenLeases;
+
     }
 
     /** Package access for testing purposes.
@@ -238,11 +241,11 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
             notUpdated.remove(leaseKey);
             // If we've seen this lease before..
             if (oldLease != null) {
-                 // If the counter hasn't changed, propagate the lastCounterIncrementNanos time from the old lease
-                 // else set it to the time of the scan
+                // If the counter hasn't changed, propagate the lastCounterIncrementNanos time from the old lease
+                // else set it to the time of the scan
                 lastCounterIncrementNanos = oldLease.getLeaseCounter().equals(lease.getLeaseCounter()) ?
-                        oldLease.getLastCounterIncrementNanos() :
-                        lastScanTimeNanos;
+                    oldLease.getLastCounterIncrementNanos() :
+                    lastScanTimeNanos;
             } else {
                 // If this new lease is unowned, it's never been renewed, else treat it as renewed as of the scan
                 lastCounterIncrementNanos = lease.getLeaseOwner() == null ? 0L : lastScanTimeNanos;
@@ -265,7 +268,7 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
     }
 
     /**
-     * @return list of leases that were expired as of our last scan.
+     * @return List of leases that were expired as of our last scan.
      */
     private List<T> getExpiredLeases() {
         return allLeases.values().stream()
@@ -274,126 +277,92 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
     }
 
     /**
-     * @return List of all active shard leases that.
-     */
-    private List<T> getAllActiveLeases() {
-        String shardEnd = SentinelCheckpoint.SHARD_END.toString();
-        return allLeases.values().stream()
-            .filter(lease -> lease instanceof KinesisClientLease)
-            .filter(lease -> ((KinesisClientLease)lease).getCheckpoint() != null)
-            .filter(lease -> !shardEnd.equals(((KinesisClientLease)lease).getCheckpoint()
-                .getSequenceNumber()))
-            .collect(Collectors.toList());
-    }
-
-    /**
-     * Drops SHARD_END leases for the worker.
-     * @param numLeasesToEvict Number of leases to evict.
-     */
-    private void evictShardEndLeases(int numLeasesToEvict) throws
-        DependencyException,
-        ProvisionedThroughputException,
-        InvalidStateException {
-        // KCL's Lease manager relies on side effects to update local copy of lease once it has done the eviction.
-        // So we must iterate over allLeases.
-        for (T lease : allLeases.values()) {
-            if(numLeasesToEvict == 0) break;
-            if(workerIdentifier.equals(lease.getLeaseOwner()) && lease instanceof KinesisClientLease) {
-                KinesisClientLease kinesisClientLease = (KinesisClientLease) lease;
-                if (kinesisClientLease.getCheckpoint() != null) {
-                    String sequenceNumber = kinesisClientLease.getCheckpoint().getSequenceNumber();
-                    if (SentinelCheckpoint.SHARD_END.toString().equals(sequenceNumber)) {
-                        leaseManager.evictLease(lease);
-                        numLeasesToEvict--;
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Compute the number of leases I should try to take based on the state of the system.
-     *
+     * Gets the of leases I should try to take based on the state of the system.
+     * Naming convetion: SHARD_END checkpointed leases - finishedShardLeases; unfinishedShardLeases otherwise
      * @param expiredLeases list of leases we determined to be expired
      * @return set of leases to take.
      */
-    private Set<T> computeLeasesToTake(final List<T> expiredLeases) throws
-        DependencyException,
-        ProvisionedThroughputException,
-        InvalidStateException {
-        Map<String, Integer> leaseCountsByHost = computeLeaseCountsByHost(expiredLeases);
+    private Set<T> getLeasesToTake(final List<T> expiredLeases) throws DependencyException, ProvisionedThroughputException, InvalidStateException {
+        final Map<String, Integer> leaseCountsByHost = computeLeaseCountsByHost(expiredLeases);
+        final Map<Boolean, List<T>> leaseGroups = getLeasesPartitionedByCheckpoint(allLeases.values());
+        final List<T> allUnfinishedShardLeases = leaseGroups.get(false);
+        final List<T> allFinishedShardLeases = leaseGroups.get(true);
         Set<T> leasesToTake = new HashSet<>();
-        List<T> allActiveLeases = getAllActiveLeases();
 
-        int numAllLeases = allLeases.values().size();
-        int numAllActiveLeases = allActiveLeases.size();
-        int numWorkers = leaseCountsByHost.size();
+        final int allLeaseCount = allLeases.values().size();
+        final int numWorkers = leaseCountsByHost.size();
 
-        if (numAllLeases == 0) {
+        if (allLeaseCount == 0) {
             // If there are no leases, I shouldn't try to take any.
             return leasesToTake;
         }
 
-        int targetTotalLeases;
-        int targetActiveLeases = 0;
+        final int myUnfinishedShardLeasesCount = getMyLeaseCount(allUnfinishedShardLeases, expiredLeases);
+        int myFinishedShardLeasesCount = getMyLeaseCount(allFinishedShardLeases, expiredLeases);
 
-        if (numWorkers >= numAllLeases) {
-            // If we have n leases and n or more workers, each worker can have up to 1 lease, including myself.
-            targetTotalLeases = 1;
-        } else {
-            /*
-             * numWorkers must be < numAllLeases.
-             *
-             * Our target for each worker is numLeases / numWorkers (+1 if numWorkers doesn't evenly divide numLeases)
-             */
-            targetTotalLeases = numAllLeases / numWorkers + (numAllLeases % numWorkers == 0 ? 0 : 1);
-            targetActiveLeases = numAllActiveLeases / numWorkers + (numAllActiveLeases % numWorkers == 0 ? 0 : 1);
+        // We want the next higher whole number for calculating targets.
+        // Eg. if numAllAnyTypeLeases = 13, numWorkers = 5. We want target = 3 for every worker.
+        int targetUnfinishedShardLeasesCount = (allUnfinishedShardLeases.size() + numWorkers - 1) / numWorkers;
+        final int targetFinishedShardLeasesCount = (allFinishedShardLeases.size() + numWorkers - 1) / numWorkers;
 
-            // Spill over is the number of leases this worker should have claimed, but did not because it would
-            // exceed the max allowed for this worker.
-            int leaseSpillover = Math.max(0, targetActiveLeases - maxLeasesForWorker);
-            if (targetActiveLeases > maxLeasesForWorker) {
-                // log exceptions
-                LOG.warn(String.format("Worker %s target is %d active shard leases and maxLeasesForWorker is %d."
-                        + " Resetting target to %d, lease spillover is %d. "
-                        + " Note that some shards may not be processed if no other workers are able to pick them up resulting in a possible stall.",
-                    workerIdentifier,
-                    targetActiveLeases,
-                    maxLeasesForWorker,
-                    maxLeasesForWorker,
-                    leaseSpillover));
-                targetActiveLeases = maxLeasesForWorker;
-            }
+        int leaseSpillover = Math.min(0, targetUnfinishedShardLeasesCount - maxLeasesForWorker);
+        if (leaseSpillover > 0) {
+            // Log warning
+            LOG.warn(String.format("Worker %s target is %d unfinished shard leases and maxLeasesForWorker is %d."
+                    + " Resetting target to %d, lease spillover is %d. "
+                    + " Note that some shards may not be processed if no other workers are able to pick them up resulting in a possible stall.",
+                workerIdentifier,
+                targetUnfinishedShardLeasesCount,
+                maxLeasesForWorker,
+                maxLeasesForWorker,
+                leaseSpillover));
+            targetUnfinishedShardLeasesCount = maxLeasesForWorker;
         }
 
-        int myActiveLeaseCount = Math.toIntExact(allActiveLeases.stream()
-            .filter(lease -> workerIdentifier.equals(lease.getLeaseOwner()))
-            .count());
+        int unfinishedShardLeasesSlots = targetUnfinishedShardLeasesCount - myUnfinishedShardLeasesCount;
+        int finishedShardLeasesSlots = targetFinishedShardLeasesCount - myFinishedShardLeasesCount;
 
-        int numTotalLeasesToReachTarget = targetTotalLeases - leaseCountsByHost.get(workerIdentifier);
-        int numActiveLeasesToReachTarget = targetActiveLeases - myActiveLeaseCount;
-
-        if(numActiveLeasesToReachTarget <= 0) return leasesToTake;
-        // If we need more active leases than we have capacity for all leases, drop shard_end leases.
-        if (numTotalLeasesToReachTarget < numActiveLeasesToReachTarget) {
-            evictShardEndLeases(numActiveLeasesToReachTarget - numTotalLeasesToReachTarget);
+        // If I have more than my share of shard_end leases, drop the extras.
+        if (finishedShardLeasesSlots < 0) {
+            evictFinishedLeases(Math.abs(finishedShardLeasesSlots));
+            finishedShardLeasesSlots = 0;
         }
 
+        // I have extra active leases and my fair share of shard_end leases, return. Some other worker will steal from me.
+        if(unfinishedShardLeasesSlots <= 0 && finishedShardLeasesSlots == 0) {
+            return leasesToTake;
+        }
+
+        // I don't have my fair share of active shard leases. So I try to take the required from expired leases.
+        // If there aren't enough expired leases, I steal.
         // Shuffle expiredLeases so workers don't all try to contend for the same leases.
         Collections.shuffle(expiredLeases);
 
-        int originalExpiredLeasesSize = expiredLeases.size();
+        // If there are any expired leases, prioritize them before stealing.
         if (expiredLeases.size() > 0) {
-            leasesToTake = leaseSelector.getLeasesToTakeFromExpiredLeases(expiredLeases, numActiveLeasesToReachTarget);
-            originalExpiredLeasesSize = leasesToTake.size();
-        } else {
-            // If there are no expired leases and we need a lease, consider stealing.
-            List<T> leasesToSteal = chooseLeasesToSteal(leaseCountsByHost, numActiveLeasesToReachTarget, targetActiveLeases, allActiveLeases);
+            final Map<Boolean, List<T>> expiredGroups = getLeasesPartitionedByCheckpoint(expiredLeases);
+            final List<T> unfinishedExpiredLeases = expiredGroups.get(false);
+
+            // Stream.limit throws exception if number provided is negative. So check first.
+            // We just want enough leases to fill up our slots.
+            leasesToTake = Stream.concat(
+                expiredGroups.get(true).stream().limit(Math.max(finishedShardLeasesSlots, 0)),
+                unfinishedExpiredLeases.stream().limit(Math.max(unfinishedShardLeasesSlots, 0))
+            ).collect(Collectors.toSet());
+
+            // If there weren't enough expired unfinished leases to fill up our unfinished shard leases slots, we will steal the difference.
+            unfinishedShardLeasesSlots = Math.max(0, unfinishedShardLeasesSlots - unfinishedExpiredLeases.size());
+
+        }
+        if (unfinishedShardLeasesSlots > 0) {
+            // If there are no expired leases and we need a lease, consider stealing. We steal only active leases.
+            // Shard end leases won't be stolen.
+            List<T> leasesToSteal = getLeasesToSteal(leaseCountsByHost, unfinishedShardLeasesSlots, targetUnfinishedShardLeasesCount, allUnfinishedShardLeases);
             for (T leaseToSteal : leasesToSteal) {
                 LOG.info(String.format(
                     "Worker %s needed %d leases but none were expired, so it will steal lease %s from %s",
                     workerIdentifier,
-                    numActiveLeasesToReachTarget,
+                    unfinishedShardLeasesSlots,
                     leaseToSteal.getLeaseKey(),
                     leaseToSteal.getLeaseOwner()));
                 leasesToTake.add(leaseToSteal);
@@ -401,17 +370,70 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
         }
 
         if (!leasesToTake.isEmpty()) {
-            LOG.info(String.format("Worker %s saw %d total leases, %d available active shard expired leases, %d " + "workers. Target " + "is %d leases, I have %d leases, I will take %d leases",
+            LOG.info(String.format("Worker %s saw %d total leases, %d expired leases, %d workers."
+                    + "Unfinished lease target is %d leases, I have %d unfinished shard leases. Finished shard leases target is %d and "
+                    + "I have %d finished shard leases. I will take %d leases in total",
                 workerIdentifier,
-                numAllLeases,
-                originalExpiredLeasesSize,
+                allLeaseCount,
+                expiredLeases.size(),
                 numWorkers,
-                targetActiveLeases,
-                myActiveLeaseCount,
+                targetUnfinishedShardLeasesCount,
+                myUnfinishedShardLeasesCount,
+                targetFinishedShardLeasesCount,
+                myFinishedShardLeasesCount,
                 leasesToTake.size()));
         }
-
         return leasesToTake;
+    }
+
+    /*
+     * Partitions the provided leases into finished and unfinished shard leases and returns a map.
+     * Finished shard leases can be retrieved using map.get(true)
+     * Unfinished shard leases can be retrieved using map.get(false)
+     * @return Map containing finished and unfinished shard leases.
+     */
+    private Map<Boolean, List<T>> getLeasesPartitionedByCheckpoint(final Collection<T> leases) {
+        final String shardEnd = SentinelCheckpoint.SHARD_END.toString();
+        return leases.stream()
+            .filter(lease -> lease instanceof KinesisClientLease)
+            .filter(lease -> ((KinesisClientLease)lease).getCheckpoint() != null)
+            .collect(Collectors.partitioningBy(lease -> shardEnd.equals(((KinesisClientLease)lease).getCheckpoint()
+                .getSequenceNumber())));
+    }
+
+    /**
+     * Drops SHARD_END leases for the worker.
+     * @param numLeasesToEvict Number of leases to evict.
+     */
+    private void evictFinishedLeases(int numLeasesToEvict) throws
+        DependencyException,
+        ProvisionedThroughputException,
+        InvalidStateException {
+        // KCL's Lease manager relies on side effects to update local(in memory) copy of lease once it has done the eviction.
+        // So we must iterate over the variable "allLeases" as the corresponding lease needs to be updated locally.
+        for (T lease : allLeases.values()) {
+            if (numLeasesToEvict-- <= 0) return;
+            if (workerIdentifier.equals(lease.getLeaseOwner()) && lease instanceof KinesisClientLease) {
+                KinesisClientLease kinesisClientLease = (KinesisClientLease) lease;
+                if (kinesisClientLease.getCheckpoint() != null) {
+                    String sequenceNumber = kinesisClientLease.getCheckpoint().getSequenceNumber();
+                    if (SentinelCheckpoint.SHARD_END.toString().equals(sequenceNumber)) {
+                        leaseManager.evictLease(lease);
+                    }
+                }
+            }
+        }
+    }
+
+    /*
+     * Returns the number of leases owned by current worker that haven't expired yet.
+     * @return The non-expired lease count for current worker.
+     */
+    private int getMyLeaseCount(final List<T> leases, final List<T> expiredLeases) {
+        return  Math.toIntExact(leases.stream()
+            .filter(lease -> !expiredLeases.contains(lease))
+            .filter(lease -> workerIdentifier.equals(lease.getLeaseOwner()))
+            .count());
     }
 
     /**
@@ -427,7 +449,7 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
      * @param target target # of leases per worker
      * @return Leases to steal, or empty list if we should not steal
      */
-    private List<T> chooseLeasesToSteal(Map<String, Integer> leaseCounts, int needed, int target, List<T> activeLeases) {
+    private List<T> getLeasesToSteal(final Map<String, Integer> leaseCounts, final int needed, final int target, final List<T> activeLeases) {
         List<T> leasesToSteal = new ArrayList<>();
 
         Entry<String, Integer> mostLoadedWorker = null;
@@ -494,7 +516,7 @@ final class StreamsLeaseTaker<T extends Lease> implements ILeaseTaker<T> {
      * @param expiredLeases list of leases that are currently expired
      * @return map of workerIdentifier to lease count
      */
-    private Map<String, Integer> computeLeaseCountsByHost(List<T> expiredLeases) {
+    private Map<String, Integer> computeLeaseCountsByHost(final List<T> expiredLeases) {
         Map<String, Integer> leaseCounts = new HashMap<>();
         // Compute the number of leases per worker by looking through allLeases and ignoring leases that have expired.
         allLeases.values().stream()
